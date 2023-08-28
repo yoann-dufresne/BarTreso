@@ -3,6 +3,10 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_system.h"
+#include "esp_netif.h"
+#include "esp_log.h"
+#include "esp_netif.h"
 
 #include "lwip/err.h"
 #include "lwip/sockets.h"
@@ -24,46 +28,21 @@ static const char *TAG = "socket server";
 // #include "freertos/FreeRTOS.h"
 // #include "freertos/task.h"
 // #include "esp_system.h"
+// #include "esp_netif.h"
 // #include "esp_wifi.h"
 // #include "esp_event.h"
 // #include "esp_log.h"
 // #include "nvs_flash.h"
-// #include "esp_netif.h"
 // #include "protocol_examples_common.h"
 
 
-#define PORT                        CONFIG_EXAMPLE_PORT
-#define KEEPALIVE_IDLE              CONFIG_EXAMPLE_KEEPALIVE_IDLE
-#define KEEPALIVE_INTERVAL          CONFIG_EXAMPLE_KEEPALIVE_INTERVAL
-#define KEEPALIVE_COUNT             CONFIG_EXAMPLE_KEEPALIVE_COUNT
+#define PORT                        CONFIG_PORT
+#define KEEPALIVE_IDLE              CONFIG_KEEPALIVE_IDLE
+#define KEEPALIVE_INTERVAL          CONFIG_KEEPALIVE_INTERVAL
+#define KEEPALIVE_COUNT             CONFIG_KEEPALIVE_COUNT
 
 
 
-// static void tcp_server_task(void *pvParameters)
-// {
-// 	uint32_t r, g, b;
-
-// 	while(1)
-// 	{
-// 		for (uint32_t i=0 ; i<50 ; i++)
-// 		{
-// 			uint32_t hue = (49-i) * 360 / 50;
-// 	        leds_hsv2rgb(hue, 100, 100, &r, &g, &b);
-// 	        leds_setled(i, r, g, b);
-// 	        leds_show();
-// 			vTaskDelay(pdMS_TO_TICKS(200));
-// 		}
-
-// 		for (uint32_t i=0 ; i<50 ; i++)
-// 		{
-// 			uint32_t hue = i * 360 / 50;
-// 	        leds_hsv2rgb(hue, 100, 100, &r, &g, &b);
-// 	        leds_setled(i, r, g, b);
-// 	        leds_show();
-// 			vTaskDelay(pdMS_TO_TICKS(200));
-// 		}
-// 	}
-// }
 
 void parse_command(const int sock);
 
@@ -134,7 +113,7 @@ void tcp_server_task(void *pvParameters)
         }
         ESP_LOGI(TAG, "Socket accepted ip address: %s", addr_str);
 
-        do_retransmit(sock);
+        parse_command(sock);
 
         shutdown(sock, 0);
         close(sock);
@@ -144,6 +123,16 @@ CLEAN_UP:
     close(listen_sock);
     vTaskDelete(NULL);
 }
+
+
+#define PARSER_READY 0
+#define PARSER_COLORS 1
+#define PARSER_MODE 2
+#define PARSER_MATRIX 3
+#define PARSER_NUM_PIXELS 4
+#define PARSER_PIXELS 5
+#define PARSER_EXIT 6
+
 
 /** Parse a command with the format:
  * 1 byte : (n) Number of colors into the palette.
@@ -158,112 +147,133 @@ CLEAN_UP:
 void parse_command(const int sock)
 {
     int len;
-    uint8_t rx_buffer[2048];
+    uint8_t rx_buffer[128];
+
+    uint32_t palette_size = 0;
+    uint8_t * palette = NULL;
+    uint32_t palette_idx = 0;
+
+    uint32_t matrix_idx = 0;
+
+    uint32_t num_pixels = 0;
+    uint32_t parserpixel_idx = 0;
+    uint32_t ledstrip_idx, pixel_idx, color_idx;
+
+    int status = PARSER_READY;
 
     do {
-        len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+        len = recv(sock, rx_buffer, sizeof(rx_buffer), 0);
         if (len < 0) {
             ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
         } else if (len == 0) {
             ESP_LOGW(TAG, "Connection closed");
         } else {
-            rx_buffer[len] = 0;
             ESP_LOGI(TAG, "Received %d bytes", len);
 
-            // --- color map ---
-            uint32_t num_colors = rx_buffer[0];
-            uint8_t * color_map = rx_buffer + 1;
-            uint32_t buffer_idx = 1 + 3 * (uint32_t)rx_buffer[0];
+            for (uint32_t buff_idx=0 ; status != PARSER_EXIT && buff_idx<len ; buff_idx++)
+            {   
+                switch (status)
+                {
+                case PARSER_READY:
+                    palette_size = rx_buffer[buff_idx];
+                    palette = (uint8_t *)malloc(palette_size * 3);
+                    memset(palette, 0, palette_size * 3);
+                    
+                    status = PARSER_COLORS;
+                    palette_idx = 0;
+                    break;
 
-            uint32_t mode = rx_buffer[buffer_idx]:
-            buffer_idx += 1;
+                case PARSER_COLORS:
+                    palette[palette_idx++] = rx_buffer[buff_idx];
 
-            // --- Full matrix coloration mode ---
-            if (mode == 0)
-            {
-            	ESP_LOGI(TAG, "Full coloration mode detected");
-            	if (len - buffer_idx < 350)
-            	{
-            		ESP_LOGE(TAG, "Too few bytes. Cannot perform a full coloration mode with only %u bytes while 350 are expected.", (len - buffer_idx));
-         			return;
-            	}
+                    if (palette_idx / 3 == palette_size)
+                    {
+                        status = PARSER_MODE;
+                    }
+                    break;
 
-            	for (uint32_t ledstrip=0 ; ledstrip<7 ; ledstrip++)
-            	{
-            		for (uint32_t pixel=0 ; pixel<50 ; pixel++)
-            		{
-            			// Get the color palette idx
-            			uint32_t color_idx = rx_buffer[buffer_idx++];
-            			if (color_idx >= num_colors)
-            			{
-            				ESP_LOGE(TAG, "Wrong color idx %u. Only %u colors declared.", color_idx, num_colors);
-            				continue;
-            			}
+                case PARSER_MODE:
+                    if (rx_buffer[buff_idx] == 0) {
+                        status = PARSER_MATRIX;
+                        matrix_idx = 0;
+                    }
+                    else
+                        status = PARSER_NUM_PIXELS;
+                    break;
 
-            			// Set the pixel color
-            			uint8_t * rgb = color_map + 3 * color_idx;
-            			leds_setled(pixel, rgb[0], rgb[1], rgb[2]);
-            		}
-            	}
+                case PARSER_MATRIX:
+                    color_idx = rx_buffer[buff_idx];
+                    if (color_idx >= palette_size)
+                    {
+                        ESP_LOGE(TAG, "Wrong color idx %lu. Only %lu colors declared.", color_idx, palette_size);
+                        matrix_idx += 1;
+                        continue;
+                    }
 
-            	leds_show();
+                    // Set the pixel color
+                    uint8_t * rgb = palette + 3 * color_idx;
+                    leds_setled((matrix_idx % 50), rgb[0], rgb[1], rgb[2]);
+                    matrix_idx += 1;
+
+                    // End of the matrix ?
+                    if (matrix_idx == 350)
+                        status = PARSER_EXIT;
+                    break;
+
+                case PARSER_NUM_PIXELS:
+                    num_pixels = rx_buffer[buff_idx];
+                    status = PARSER_PIXELS;
+                    break;
+
+                case PARSER_PIXELS:
+                    switch (parserpixel_idx % 3)
+                    {
+                    case 0:
+                        ledstrip_idx = rx_buffer[buff_idx];
+                        break;
+                    case 1:
+                        pixel_idx = rx_buffer[buff_idx];
+                        break;
+                    case 2:
+                        color_idx = rx_buffer[buff_idx];
+
+                        // Error detection
+                        if (ledstrip_idx >= 7) {
+                            ESP_LOGE(TAG, "Strip %lu does not exists.", ledstrip_idx);
+                            parserpixel_idx += 1; break;
+                        }
+                        if (pixel_idx >= 50) {
+                            ESP_LOGE(TAG, "Prixel %lu does not exists.", pixel_idx);
+                            break;
+                        }
+                        if (color_idx >= palette_size) {
+                            ESP_LOGE(TAG, "Wrong color idx %lu. Only %lu colors declared.", color_idx, palette_size);
+                            parserpixel_idx += 1;
+                            if (parserpixel_idx == 3 * num_pixels)
+                                status = PARSER_EXIT;
+                            break;
+                        }
+
+                        // Setting the pixel
+                        uint8_t * rgb = palette + 3 * color_idx;
+                        leds_setled(pixel_idx, rgb[0], rgb[1], rgb[2]);
+
+                        parserpixel_idx += 1;
+
+                        // Verify end
+                        if (parserpixel_idx == 3 * num_pixels)
+                            status = PARSER_EXIT;
+
+                        break;
+                    }
+                }
             }
 
-            // --- Pixel by pixel coloration mode ---
-            else if (mode == 1)
-            {
-            	ESP_LOGI(TAG, "Pixel by pixel coloration mode detected.")
-
-            	// Getting the number of pixels to set
-            	uint32_t num_pixel = rx_buffer[buffer_idx];
-
-            	if ((len - buffer_idx) < (num_pixel * 3))
-            	{
-            		ESP_LOGE(TAG, "Too few bytes. Cannot set %u pixels with only %u bytes while 3 bytes per pixel are requiered.", num_pixel, (len - buffer_idx));
-            		return;
-            	}
-
-            	for (uint32_t i=0 ; i<num_pixel ; i++)
-            	{
-            		// Parsing the next pixel
-            		uint32_t strip_idx = rx_buffer[buffer_idx++];
-            		uint32_t pixel = rx_buffer[buffer_idx++];
-					uint32_t color_idx = rx_buffer[buffer_idx++];
-					
-					if (strip_idx >= 7)
-        			{
-        				ESP_LOGE(TAG, "Strip %u does not exists.", strip_idx);
-        				continue;
-        			}
-
-        			if (pixel >= 50)
-        			{
-        				ESP_LOGE(TAG, "Strip %u does not exists.", strip_idx);
-        				continue;
-        			}
-
-            		if (color_idx >= num_colors)
-        			{
-        				ESP_LOGE(TAG, "Wrong color idx %u. Only %u colors declared.", color_idx, num_colors);
-        				continue;
-        			}
-
-        			// Setting the pixel
-        			uint8_t * rgb = color_map + 3 * color_idx;
-            		leds_setled(pixel, rgb[0], rgb[1], rgb[2]);
-            	}
-
-            	leds_show();
-            }
-
-            // Wrong mode
-            else
-            {
-            	ESP_LOGE(TAG, "Wrong coloration mode %u at byte %u. Skipping", mode, buffer_idx);
-            	return;
-            }
         }
-    } while (len > 0);
+    } while (status != PARSER_EXIT && len > 0);
+
+    // setup a led update
+    leds_show();
 }
 
 
