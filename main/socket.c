@@ -15,26 +15,6 @@
 
 static const char *TAG = "socket server";
 
-// /* BSD Socket API Example
-
-//    This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-//    Unless required by applicable law or agreed to in writing, this
-//    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-//    CONDITIONS OF ANY KIND, either express or implied.
-// */
-// #include <string.h>
-// #include <sys/param.h>
-// #include "freertos/FreeRTOS.h"
-// #include "freertos/task.h"
-// #include "esp_system.h"
-// #include "esp_netif.h"
-// #include "esp_wifi.h"
-// #include "esp_event.h"
-// #include "esp_log.h"
-// #include "nvs_flash.h"
-// #include "protocol_examples_common.h"
-
 
 #define PORT                        CONFIG_PORT
 #define KEEPALIVE_IDLE              CONFIG_KEEPALIVE_IDLE
@@ -157,7 +137,7 @@ void parse_command(const int sock)
 
     uint32_t num_pixels = 0;
     uint32_t parserpixel_idx = 0;
-    uint32_t ledstrip_idx, pixel_idx, color_idx;
+    uint32_t ledstrip_idx=7, pixel_idx=50, color_idx=256;
 
     int status = PARSER_READY;
 
@@ -171,7 +151,7 @@ void parse_command(const int sock)
             ESP_LOGI(TAG, "Received %d bytes", len);
 
             for (uint32_t buff_idx=0 ; status != PARSER_EXIT && buff_idx<len ; buff_idx++)
-            {   
+            {
                 switch (status)
                 {
                 case PARSER_READY:
@@ -257,8 +237,8 @@ void parse_command(const int sock)
                         // Setting the pixel
                         uint8_t * rgb = palette + 3 * color_idx;
                         leds_setled(pixel_idx, rgb[0], rgb[1], rgb[2]);
-
-                        parserpixel_idx += 1;
+                        // de-init parameters
+                        ledstrip_idx = 7; pixel_idx = 50; color_idx = 256;
 
                         // Verify end
                         if (parserpixel_idx == 3 * num_pixels)
@@ -266,6 +246,7 @@ void parse_command(const int sock)
 
                         break;
                     }
+                    parserpixel_idx += 1;
                 }
             }
 
