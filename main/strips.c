@@ -73,7 +73,7 @@ void leds_init()
 
 void leds_setled(uint32_t led_idx, uint8_t r, uint8_t g, uint8_t b)
 {
-    ESP_LOGI(TAG, "Set pixel %lu (%lu %lu %lu)", led_idx, (uint32_t)r, (uint32_t)g, (uint32_t)b);
+    // ESP_LOGI(TAG, "Set pixel %lu (%lu %lu %lu)", led_idx, (uint32_t)r, (uint32_t)g, (uint32_t)b);
     ESP_ERROR_CHECK(led_strip_set_pixel(leds_pixels, led_idx, g, r, b));
 }
 
@@ -82,7 +82,7 @@ void leds_update_task(void *pvParameters)
 {
     while (1) {
         // Flush RGB values to LEDs
-        ESP_LOGI(TAG, "Leds update");
+        // ESP_LOGI(TAG, "Leds update");
         ESP_ERROR_CHECK(led_strip_refresh(leds_pixels));
         vTaskSuspend(leds_task);
     }
@@ -91,7 +91,7 @@ void leds_update_task(void *pvParameters)
 
 void leds_show()
 {
-    ESP_LOGI(TAG, "Leds show");
+    // ESP_LOGI(TAG, "Leds show");
     vTaskResume(leds_task);
 }
 
