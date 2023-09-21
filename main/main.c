@@ -29,11 +29,11 @@ void app_main(void)
 
     // --- Init wifi ---
 
-    // wifi_init();
+    wifi_init();
 
     // --- Init ledstrips ---
     btns_init();
 
     // --- Init the server socket ---
-    // sock_init();
+    sock_init();
 }

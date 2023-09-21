@@ -38,8 +38,8 @@ static void gpio_task_example(void* arg)
     for(;;) {
         if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
             printf("GPIO[%"PRIu32"] intr, val: %d\n", io_num, gpio_get_level(io_num));
-            uint8_t msg[] = {1, 'R'};
-            sock_send(msg, 2);
+            uint8_t msg[] = {'R'};
+            sock_send(msg, 1);
         }
     }
 }

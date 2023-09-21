@@ -98,6 +98,7 @@ void tcp_client_task(void *pvParameters)
             if (mailbox[0] > 0)
             {
                 err = send(sock, mailbox, mailbox[0]+1, 0);
+                mailbox[0] = 0;
                 if (err < 0) {
                     ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     break;
