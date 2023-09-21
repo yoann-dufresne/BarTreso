@@ -1,4 +1,3 @@
-#include "strips.h"
 #include "socket.h"
 
 #include "freertos/FreeRTOS.h"
@@ -8,13 +7,14 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "esp_mac.h"
 
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
 
-static const char *TAG = "socket server";
+static const char *TAG = "socket client";
 
 
 #define PORT                        CONFIG_PORT
@@ -23,259 +23,111 @@ static const char *TAG = "socket server";
 #define KEEPALIVE_COUNT             CONFIG_KEEPALIVE_COUNT
 
 
+static uint8_t mailbox[256];
 
 
-void parse_command(const int sock);
 
-void tcp_server_task(void *pvParameters)
+void tcp_client_task(void *pvParameters)
 {
-    char addr_str[128];
-    int addr_family = AF_INET; // IP v4 Addresses
+    memset(mailbox, 0, 256);
+
+    // char rx_buffer[256];
+    char host_ip[] = "192.168.1.76";
+    int addr_family = 0;
     int ip_protocol = 0;
-    int keepAlive = 1;
-    int keepIdle = KEEPALIVE_IDLE;
-    int keepInterval = KEEPALIVE_INTERVAL;
-    int keepCount = KEEPALIVE_COUNT;
-    int nodelay = 1;
-    struct sockaddr_storage dest_addr;
 
-    if (addr_family == AF_INET) {
-        struct sockaddr_in *dest_addr_ip4 = (struct sockaddr_in *)&dest_addr;
-        dest_addr_ip4->sin_addr.s_addr = htonl(INADDR_ANY);
-        dest_addr_ip4->sin_family = AF_INET;
-        dest_addr_ip4->sin_port = htons(PORT);
+
+    while (1)
+    {
+        // Config socket structure
+        struct sockaddr_in dest_addr;
+        inet_pton(AF_INET, host_ip, &dest_addr.sin_addr);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(PORT);
+        addr_family = AF_INET;
         ip_protocol = IPPROTO_IP;
-    }
 
-    int listen_sock = socket(addr_family, SOCK_STREAM, ip_protocol);
-    if (listen_sock < 0) {
-        ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-        vTaskDelete(NULL);
-        return;
-    }
-    int opt = 1;
-    setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    ESP_LOGI(TAG, "Socket created");
-
-    int err = bind(listen_sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-    if (err != 0) {
-        ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
-        ESP_LOGE(TAG, "IPPROTO: %d", addr_family);
-        goto CLEAN_UP;
-    }
-    ESP_LOGI(TAG, "Socket bound, port %d", PORT);
-
-    err = listen(listen_sock, 1);
-    if (err != 0) {
-        ESP_LOGE(TAG, "Error occurred during listen: errno %d", errno);
-        goto CLEAN_UP;
-    }
-
-    while (1) {
-
-        ESP_LOGI(TAG, "Socket listening");
-
-        struct sockaddr_storage source_addr; // Large enough for both IPv4 or IPv6
-        socklen_t addr_len = sizeof(source_addr);
-        int sock = accept(listen_sock, (struct sockaddr *)&source_addr, &addr_len);
+        // Socket creation
+        int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
         if (sock < 0) {
-            ESP_LOGE(TAG, "Unable to accept connection: errno %d", errno);
-            break;
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            shutdown(sock, 0);
+            close(sock);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
         }
+        ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, PORT);
 
-        // Set tcp keepalive option
+        // Set options
+        int keepAlive = 1;
+        // int keepIdle = KEEPALIVE_IDLE;
+        // int keepInterval = KEEPALIVE_INTERVAL;
+        // int keepCount = KEEPALIVE_COUNT;
+        int nodelay = 1;
+
         setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(int));
-        setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
-        setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
-        setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
+        // setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
+        // setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
+        // setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
         setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(int));
-        // Convert ip address to string
-        if (source_addr.ss_family == PF_INET) {
-            inet_ntoa_r(((struct sockaddr_in *)&source_addr)->sin_addr, addr_str, sizeof(addr_str) - 1);
+
+        // Socket connection
+        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+        if (err != 0) {
+            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
+            shutdown(sock, 0);
+            close(sock);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
         }
-        ESP_LOGI(TAG, "Socket accepted ip address: %s", addr_str);
+        ESP_LOGI(TAG, "Successfully connected");
 
-        parse_command(sock);
+        // first message: mac address
+        uint8_t connec_msg[13] = {12, 'E', 'S', 'P', ' ', 0, 0, 0, 0, 0, 0, 0, 0};
+        esp_efuse_mac_get_default(connec_msg+5);
+        err = send(sock, connec_msg, 13, 0);
+        if (err < 0) {
+            ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+            shutdown(sock, 0);
+            close(sock);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
 
-        shutdown(sock, 0);
-        close(sock);
-    }
-
-CLEAN_UP:
-    close(listen_sock);
-    vTaskDelete(NULL);
-}
-
-
-#define PARSER_READY 0
-#define PARSER_COLORS 1
-#define PARSER_MODE 2
-#define PARSER_MATRIX 3
-#define PARSER_NUM_PIXELS 4
-#define PARSER_PIXELS 5
-#define PARSER_EXIT 6
-
-
-/** Parse a command with the format:
- * 1 byte : (n) Number of colors into the palette.
- * 3 x n bytes : (r, g, b) Triplets to represent the colors
- * 1 byte : (mode) 0 is pixel by pixel mode ; 1 is addressed pixels mode
- * If mode == 0:
- * 350 bytes : (pixels) 1 byte [palette] per pixel.
- * If mode == 1:
- * 1 byte : (i) Number of pixels to change
- * 3 x i bytes : (l, p, c) p-th led on the l ledstrip to set with the color c from the color palette
- **/
-void parse_command(const int sock)
-{
-    int len;
-    uint8_t rx_buffer[128];
-
-    uint32_t palette_size = 0;
-    uint8_t * palette = NULL;
-    uint32_t palette_idx = 0;
-
-    uint32_t matrix_idx = 0;
-
-    uint32_t num_pixels = 0;
-    uint32_t parserpixel_idx = 0;
-    uint32_t ledstrip_idx=7, pixel_idx=50, color_idx=256;
-
-    int status = PARSER_READY;
-
-    do {
-        len = recv(sock, rx_buffer, sizeof(rx_buffer), 0);
-        if (len < 0) {
-            ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
-        } else if (len == 0) {
-            ESP_LOGW(TAG, "Connection closed");
-        } else {
-            ESP_LOGI(TAG, "Received %d bytes", len);
-
-            for (uint32_t buff_idx=0 ; status != PARSER_EXIT && buff_idx<len ; buff_idx++)
+        while (1) {
+            if (mailbox[0] > 0)
             {
-                switch (status)
-                {
-                case PARSER_READY:
-                    ESP_LOGI(TAG, "timer : %lld", esp_timer_get_time());
-
-                    palette_size = rx_buffer[buff_idx];
-                    palette = (uint8_t *)malloc(palette_size * 3);
-                    memset(palette, 0, palette_size * 3);
-                    
-                    status = PARSER_COLORS;
-                    palette_idx = 0;
+                err = send(sock, mailbox, mailbox[0]+1, 0);
+                if (err < 0) {
+                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     break;
-
-                case PARSER_COLORS:
-                    palette[palette_idx++] = rx_buffer[buff_idx];
-
-                    if (palette_idx / 3 == palette_size)
-                    {
-                        status = PARSER_MODE;
-                    }
-                    break;
-
-                case PARSER_MODE:
-                    if (rx_buffer[buff_idx] == 0) {
-                        status = PARSER_MATRIX;
-                        matrix_idx = 0;
-                    }
-                    else
-                        status = PARSER_NUM_PIXELS;
-                    break;
-
-                case PARSER_MATRIX:
-                    color_idx = rx_buffer[buff_idx];
-                    if (color_idx >= palette_size)
-                    {
-                        ESP_LOGE(TAG, "Wrong color idx %lu. Only %lu colors declared.", color_idx, palette_size);
-                        matrix_idx += 1;
-                        continue;
-                    }
-
-                    // Set the pixel color
-                    uint8_t * rgb = palette + 3 * color_idx;
-                    leds_setled((matrix_idx % 50), rgb[0], rgb[1], rgb[2]);
-                    matrix_idx += 1;
-
-                    // End of the matrix ?
-                    if (matrix_idx == 350)
-                    {
-                        status = PARSER_READY;
-                        leds_show();
-                    }
-                    break;
-
-                case PARSER_NUM_PIXELS:
-                    num_pixels = rx_buffer[buff_idx];
-                    parserpixel_idx = 0;
-                    status = PARSER_PIXELS;
-                    break;
-
-                case PARSER_PIXELS:
-                    switch (parserpixel_idx % 3)
-                    {
-                    case 0:
-                        ledstrip_idx = rx_buffer[buff_idx];
-                        break;
-                    case 1:
-                        pixel_idx = rx_buffer[buff_idx];
-                        break;
-                    case 2:
-                        color_idx = rx_buffer[buff_idx];
-
-                        // Error detection
-                        if (ledstrip_idx >= 7) {
-                            ESP_LOGE(TAG, "Strip %lu does not exists.", ledstrip_idx);
-                            parserpixel_idx += 1; break;
-                        }
-                        if (pixel_idx >= 50) {
-                            ESP_LOGE(TAG, "Pixel %lu does not exists.", pixel_idx);
-                            break;
-                        }
-                        if (color_idx >= palette_size) {
-                            ESP_LOGE(TAG, "Wrong color idx %lu. Only %lu colors declared.", color_idx, palette_size);
-                            parserpixel_idx += 1;
-                            if (parserpixel_idx == 3 * num_pixels)
-                            {
-                                status = PARSER_READY;
-                                leds_show();
-                            }
-                            break;
-                        }
-
-                        // Setting the pixel
-                        uint8_t * rgb = palette + 3 * color_idx;
-                        leds_setled(pixel_idx, rgb[0], rgb[1], rgb[2]);
-                        // de-init parameters
-                        ledstrip_idx = 7; pixel_idx = 50; color_idx = 256;
-
-                        break;
-                    }
-                    parserpixel_idx += 1;
-
-                    // Verify end
-                    if (parserpixel_idx == 3 * num_pixels)
-                    {
-                        status = PARSER_READY;
-                        leds_show();
-                    }
                 }
             }
-
+            else {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
         }
-    } while (status != PARSER_EXIT && len > 0);
 
-    // setup a led update
-    leds_show();
+        if (sock != -1) {
+            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            shutdown(sock, 0);
+            close(sock);
+        }
+    }
 }
+
+
+void sock_send(uint8_t * msg, uint8_t size)
+{
+    memcpy(mailbox+1, msg, size);
+    mailbox[0] = size;
+}
+
 
 
 void sock_init()
 {
-	xTaskCreate(tcp_server_task, "tcp_server", 4096, NULL, 5, NULL);
+	xTaskCreate(tcp_client_task, "tcp_server", 4096, NULL, 5, NULL);
 }
 
 
