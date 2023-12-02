@@ -1,11 +1,18 @@
+# IDEs
+.vscode
+*.lock
+*~
+
 # Prerequisites
 *.d
 
 # Object files
+build/
 *.o
 *.ko
 *.obj
 *.elf
+sdkconfig
 
 # Linker output
 *.ilk

@@ -1,6 +1,5 @@
 #include "wifi.h"
-#include "socket.h"
-#include "buttons.h"
+#include "http.h"
 
 // #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -31,9 +30,7 @@ void app_main(void)
 
     wifi_init();
 
-    // --- Init ledstrips ---
-    btns_init();
+    // --- Init HTTP server ---
 
-    // --- Init the server socket ---
-    sock_init();
+    http_init();
 }
