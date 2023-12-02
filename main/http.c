@@ -26,7 +26,7 @@ void http_init()
 esp_err_t get_handler(httpd_req_t *req)
 {
     /* Send a simple response */
-    const char resp[] = "URI GET Response";
+    const char resp[] = "Salut les copains !";
     httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
